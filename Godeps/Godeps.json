@@ -1,0 +1,23 @@
+{
+	"ImportPath": "github.com/tilteng/go-api-request-logger",
+	"GoVersion": "go1.7",
+	"GodepVersion": "v74",
+	"Packages": [
+		"./..."
+	],
+	"Deps": [
+		{
+			"ImportPath": "github.com/gorilla/mux",
+			"Comment": "v1.1-27-g757bef9",
+			"Rev": "757bef944d0f21880861c2dd9c871ca543023cba"
+		},
+		{
+			"ImportPath": "github.com/tilteng/go-api-router/api_router",
+			"Rev": "618577d2ef49b82d2ab333ca0cafdd3b7aa7f7f7"
+		},
+		{
+			"ImportPath": "github.com/tilteng/go-logger/logger",
+			"Rev": "72cf7202baa7a53b73bb5d287e00e88c2cb3cc18"
+		}
+	]
+}
