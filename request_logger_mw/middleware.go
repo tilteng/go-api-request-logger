@@ -1,11 +1,11 @@
 package request_logger_mw
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 
 	"github.com/tilteng/go-api-router/api_router"
 	"github.com/tilteng/go-logger/logger"
@@ -79,46 +79,35 @@ func (self *RequestLoggerMiddleware) SetLogger(logger logger.CtxLogger) *Request
 	return self
 }
 
-func (self *RequestLoggerWrapper) formatBody(ctx context.Context, body []byte) interface{} {
+func (self *RequestLoggerWrapper) filterBody(ctx context.Context, body []byte) []byte {
+	// body is already a copy from the request, so no need to clone first
 	if self.opts.LogBodyFilter != nil {
 		body = self.opts.LogBodyFilter.FilterBody(ctx, body)
 	}
+
 	if self.base_opts.LogBodyFilter != nil {
 		body = self.opts.LogBodyFilter.FilterBody(ctx, body)
 	}
-	// This is all hacky... just to get something logged for now
-	// in a reasonable format.
-	var body_obj interface{}
 
-	if err := json.Unmarshal(body, &body_obj); err == nil {
-		return body
-	}
-
-	body_str := string(body)
-
-	if json_body, err := json.Marshal(body_str); err == nil {
-		return json_body
-	}
-
-	return `"` + body_str + `"`
+	return body
 }
 
-func (self *RequestLoggerWrapper) formatQuery(ctx context.Context, v url.Values) string {
-	j, _ := json.Marshal(v)
-	return string(j)
-}
+func (self *RequestLoggerWrapper) filterHeaders(ctx context.Context, hdrs http.Header) http.Header {
+	n_hdrs := make(map[string][]string, len(hdrs))
+	for k, v := range hdrs {
+		n_hdrs[k] = make([]string, len(v), len(v))
+		copy(n_hdrs[k], v)
+	}
 
-func (self *RequestLoggerWrapper) formatHeaders(ctx context.Context, hdrs http.Header) interface{} {
 	if self.opts.LogHeadersFilter != nil {
-		hdrs = self.opts.LogHeadersFilter.FilterHeaders(ctx, hdrs)
+		n_hdrs = self.opts.LogHeadersFilter.FilterHeaders(ctx, n_hdrs)
 	}
 
 	if self.base_opts.LogHeadersFilter != nil {
-		hdrs = self.opts.LogHeadersFilter.FilterHeaders(ctx, hdrs)
+		n_hdrs = self.opts.LogHeadersFilter.FilterHeaders(ctx, n_hdrs)
 	}
 
-	json_hdrs, _ := json.Marshal(hdrs)
-	return json_hdrs
+	return n_hdrs
 }
 
 func (self *RequestLoggerWrapper) Wrap(next api_router.RouteFn) api_router.RouteFn {
@@ -127,41 +116,59 @@ func (self *RequestLoggerWrapper) Wrap(next api_router.RouteFn) api_router.Route
 		rt := rctx.CurrentRoute()
 		http_req := rctx.HTTPRequest()
 		method := http_req.Method
-		path := http_req.URL.EscapedPath()
+
+		if self.opts.Logger == nil || self.opts.Disable {
+			// No logging... just run the handler
+			next(ctx)
+			return
+		}
 
 		body, err := rctx.BodyCopy()
 		if err != nil {
 			panic(fmt.Sprintf("Couldn't read body: %+v", err))
 		}
-		if self.opts.Logger != nil && !self.opts.Disable {
-			self.opts.Logger.LogDebugf(
-				ctx,
-				`Received request: {"route":{"method":"%s","route":"%s","path":"%s","query":%s},"headers":%s,"body":%s}`,
-				method,
-				rt.FullPath(),
-				path,
-				self.formatQuery(ctx, http_req.URL.Query()),
-				self.formatHeaders(ctx, rctx.HTTPRequest().Header),
-				self.formatBody(ctx, body),
-			)
+
+		// Copy the original URL -- This ensures the query string can't
+		// be modified within the handler.
+		orig_url := *http_req.URL
+
+		body = self.filterBody(ctx, body)
+
+		log_info := map[string]interface{}{
+			"request": map[string]interface{}{
+				"route": map[string]interface{}{
+					"method": method,
+					"route":  rt.FullPath(),
+					"path":   orig_url.EscapedPath(),
+					"query":  orig_url.Query(),
+				},
+				"headers": self.filterHeaders(ctx, http_req.Header),
+				"body":    string(body),
+			},
 		}
 
-		// Do something with body
+		buf := bytes.NewBufferString("")
+		encoder := json.NewEncoder(buf)
+		encoder.SetEscapeHTML(false)
+
+		encoder.Encode(log_info)
+		self.opts.Logger.LogDebug(ctx, "Received request:", buf.String())
+
 		next(ctx)
 
 		writer := rctx.ResponseWriter()
-		body = writer.ResponseCopy()
+		body = self.filterBody(ctx, writer.ResponseCopy())
 
-		self.opts.Logger.LogDebugf(
-			ctx,
-			`Sent response: {"status":%d,"route":{"method":"%s","route":"%s","path":"%s"},"headers":%s,"body":%s}`,
-			writer.Status(),
-			method,
-			rt.FullPath(),
-			path,
-			self.formatHeaders(ctx, rctx.ResponseWriter().Header()),
-			self.formatBody(ctx, body),
-		)
+		log_info["response"] = map[string]interface{}{
+			"status":  writer.Status(),
+			"headers": self.filterHeaders(ctx, writer.Header()),
+			"body":    string(body),
+		}
+
+		buf.Reset()
+		encoder.Encode(log_info)
+
+		self.opts.Logger.LogDebug(ctx, "Sent response:", buf.String())
 	}
 }
 
