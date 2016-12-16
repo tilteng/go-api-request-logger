@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/tilteng/go-api-router/api_router"
 	"github.com/tilteng/go-logger/logger"
@@ -150,9 +151,11 @@ func (self *RequestLoggerWrapper) Wrap(next api_router.RouteFn) api_router.Route
 		buf := bytes.NewBufferString("")
 		encoder := json.NewEncoder(buf)
 		encoder.SetEscapeHTML(false)
-
 		encoder.Encode(log_info)
-		self.opts.Logger.LogDebug(ctx, "Received request:", buf.String())
+
+		self.opts.Logger.LogDebug(
+			ctx, "Received request:", strings.TrimSpace(buf.String()),
+		)
 
 		next(ctx)
 
@@ -168,7 +171,9 @@ func (self *RequestLoggerWrapper) Wrap(next api_router.RouteFn) api_router.Route
 		buf.Reset()
 		encoder.Encode(log_info)
 
-		self.opts.Logger.LogDebug(ctx, "Sent response:", buf.String())
+		self.opts.Logger.LogDebug(
+			ctx, "Sent response:", strings.TrimSpace(buf.String()),
+		)
 	}
 }
 
